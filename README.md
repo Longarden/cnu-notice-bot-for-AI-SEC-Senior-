@@ -1,128 +1,235 @@
-# CNU 컴퓨터인공지능학부 공지 알리미
+# CNU Computer & Artificial Intelligence Department Notice Notifier
 
-충남대학교 컴퓨터인공지능학부 홈페이지의 4개 게시판(학사공지, 교내일반소식, 교외활동·인턴·취업, 사업단소식)을 매일 자동으로 확인해서 새 공지를 텔레그램으로 보내준다.
+This project automatically checks 4 notice boards from the Chungnam National University (CNU) Computer & Artificial Intelligence Department website every day and sends new notices to Telegram.
 
-GitHub Actions의 무료 cron으로 동작하므로 개인 PC가 꺼져 있어도 알림이 온다.
-
----
-
-## 처음 설정하는 법
-
-### 1단계: 텔레그램 봇 만들기
-
-1. 텔레그램에서 `@BotFather` 검색해서 대화 시작
-2. `/newbot` 입력
-3. 봇 이름 입력 (예: `CNU 공지 알리미`)
-4. 봇 username 입력 (예: `cnu_notice_dmsak_bot`, 반드시 `bot`으로 끝나야 함)
-5. BotFather가 알려주는 토큰 복사. 다음과 비슷한 형태:
-   ```
-   7123456789:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-   ```
-
-### 2단계: chat_id 알아내기
-
-1. 방금 만든 봇을 찾아서 (검색창에 봇 username 입력) 대화방 열고 `/start` 보내기
-2. 브라우저에서 다음 URL을 연다 (`<BOT_TOKEN>` 자리에 1단계에서 받은 토큰 넣기):
-   ```
-   https://api.telegram.org/bot<BOT_TOKEN>/getUpdates
-   ```
-3. 응답 JSON에서 `"chat":{"id":123456789,...}` 부분을 찾아 그 숫자가 chat_id
-   - 예: `123456789`
-   - 만약 `result`가 비어 있으면 봇한테 `/start`를 다시 보내고 새로고침
-
-### 3단계: GitHub 저장소 만들기
-
-1. https://github.com 가입 (계정 없으면)
-2. https://github.com/new 에서 새 repo 생성
-   - Repository name: `cnu-notice-bot` (아무 이름 가능)
-   - **Private** 권장 (chat_id가 commit에 노출되면 누구나 봇 메시지 보낼 수 있음 — token만 안전하면 chat_id는 큰 문제는 아니지만 그래도)
-   - "Add a README file" 체크 해제
-3. 이 폴더(`C:\Users\dmsak\cnu-notice-bot`)에서 git 초기화 후 push:
-   ```powershell
-   cd C:\Users\dmsak\cnu-notice-bot
-   git init
-   git add .
-   git commit -m "init: cnu notice bot"
-   git branch -M main
-   git remote add origin https://github.com/<USERNAME>/cnu-notice-bot.git
-   git push -u origin main
-   ```
-   (`<USERNAME>` 자리에 본인 GitHub 사용자명)
-
-### 4단계: GitHub Secrets에 토큰/chat_id 등록
-
-1. 생성한 repo 페이지로 이동
-2. 상단 메뉴 `Settings` → 좌측 `Secrets and variables` → `Actions`
-3. `New repository secret` 클릭해서 두 개 추가:
-   - Name: `TELEGRAM_BOT_TOKEN`, Secret: 1단계의 봇 토큰
-   - Name: `TELEGRAM_CHAT_ID`, Secret: 2단계의 chat_id 숫자
-
-### 5단계: 첫 실행 테스트
-
-1. repo 페이지 → `Actions` 탭
-2. 좌측 `CNU Notice Notifier` 워크플로우 선택
-3. 우측 `Run workflow` 버튼 → `Run workflow` 클릭
-4. 1~2분 후 완료. 첫 실행은 "초기화" 단계라 텔레그램 메시지는 안 가고 `seen.json`만 채워진다 (스팸 방지)
-5. 다음날 새 공지가 있으면 자동으로 텔레그램에 도착
+Since it runs using GitHub Actions free cron jobs, notifications will still arrive even if your personal PC is turned off.
 
 ---
 
-## 동작 방식
+# Initial Setup
 
-- **스케줄**: 매일 UTC 00:00 = 한국시간 오전 9시에 자동 실행
-- **수집 범위**: 4개 게시판 각각 첫 페이지(최신 10건)
-- **새 글 판정**: `seen.json`에 저장된 게시판별 마지막 articleNo보다 큰 글
-- **상태 저장**: 매 실행 후 `seen.json`을 git commit & push로 갱신 (다음 실행에 전달)
-- **메시지 형식**: 게시판별로 묶어서 제목 + 작성일 + 링크
+## Step 1: Create a Telegram Bot
 
-## 로컬에서 테스트
+1. Search for `@BotFather` in Telegram and start a chat
+2. Send `/newbot`
+3. Enter your bot name (example: `CNU Notice Notifier`)
+4. Enter a bot username (example: `cnu_notice_dmsak_bot`)
 
-스크래핑 동작만 확인하고 싶을 때:
+   * It must end with `bot`
+5. Copy the token provided by BotFather. It looks like this:
 
-```powershell
+```plaintext id="zjlwmq"
+7123456789:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+---
+
+## Step 2: Find Your chat_id
+
+1. Open a chat with the bot you just created and send `/start`
+2. Open the following URL in your browser
+   (replace `<BOT_TOKEN>` with the token from Step 1):
+
+```plaintext id="fwznho"
+https://api.telegram.org/bot<BOT_TOKEN>/getUpdates
+```
+
+3. In the JSON response, find:
+
+```json id="wx81eh"
+"chat":{"id":123456789,...}
+```
+
+The number is your `chat_id`.
+
+Example:
+
+```plaintext id="6mn1h6"
+123456789
+```
+
+If `result` is empty:
+
+* send `/start` to the bot again
+* refresh the page
+
+---
+
+## Step 3: Create a GitHub Repository
+
+1. Sign up at [GitHub](https://github.com?utm_source=chatgpt.com) if you do not already have an account
+
+2. Create a new repository at [Create New Repository](https://github.com/new?utm_source=chatgpt.com)
+
+   * Repository name: `cnu-notice-bot` (any name is fine)
+   * `Private` recommended
+   * Uncheck `"Add a README file"`
+
+3. Initialize git and push from this folder:
+
+```powershell id="n64jsr"
+cd C:\Users\dmsak\cnu-notice-bot
+git init
+git add .
+git commit -m "init: cnu notice bot"
+git branch -M main
+git remote add origin https://github.com/<USERNAME>/cnu-notice-bot.git
+git push -u origin main
+```
+
+Replace `<USERNAME>` with your GitHub username.
+
+---
+
+## Step 4: Add GitHub Secrets
+
+1. Open your repository page
+2. Go to:
+
+   * `Settings`
+   * `Secrets and variables`
+   * `Actions`
+3. Click `New repository secret` and add these two secrets:
+
+| Name                 | Value                   |
+| -------------------- | ----------------------- |
+| `TELEGRAM_BOT_TOKEN` | Your Telegram bot token |
+| `TELEGRAM_CHAT_ID`   | Your chat_id            |
+
+---
+
+## Step 5: First Test Run
+
+1. Open the repository page
+2. Go to the `Actions` tab
+3. Select the `CNU Notice Notifier` workflow
+4. Click:
+
+   * `Run workflow`
+   * then `Run workflow` again
+5. Wait 1–2 minutes
+
+The first run only initializes `seen.json` to prevent spam, so Telegram messages will not be sent yet.
+
+Starting from the next run, new notices will automatically arrive on Telegram.
+
+---
+
+# How It Works
+
+* **Schedule**: Runs every day at UTC 00:00 (= 9 AM Korea time)
+* **Boards monitored**:
+
+  * Academic Notices
+  * General Campus News
+  * External Activities / Internship / Jobs
+  * Project & Center Notices
+* **Detection method**:
+
+  * Compares the latest `articleNo` with values stored in `seen.json`
+* **State persistence**:
+
+  * `seen.json` is automatically committed and pushed after each run
+* **Message format**:
+
+  * Grouped by board with title + date + link
+
+---
+
+# Local Testing
+
+To test only the scraping logic:
+
+```powershell id="h43trn"
 cd C:\Users\dmsak\cnu-notice-bot
 py -m pip install -r requirements.txt
 $env:DRY_RUN="1"
 py notify.py
 ```
 
-`DRY_RUN=1`이면 텔레그램 전송을 건너뛰고 콘솔에만 출력한다.
+With `DRY_RUN=1`, Telegram messages are skipped and output is printed to the console only.
 
-토큰을 받고 실제 전송까지 테스트하려면 `.env.example`을 `.env`로 복사해서 값을 채운 뒤:
+To test actual Telegram delivery:
 
-```powershell
-$env:TELEGRAM_BOT_TOKEN="여기에토큰"
-$env:TELEGRAM_CHAT_ID="여기에chatid"
+```powershell id="oktl8d"
+$env:TELEGRAM_BOT_TOKEN="YOUR_TOKEN"
+$env:TELEGRAM_CHAT_ID="YOUR_CHAT_ID"
 py notify.py
 ```
 
-## 스케줄 시간 바꾸기
+---
 
-`.github/workflows/notify.yml`의 cron 값을 수정. cron은 UTC 기준.
+# Changing the Schedule
 
-- 한국시간 오전 8시 → `0 23 * * *`
-- 한국시간 정오 → `0 3 * * *`
-- 매일 9시와 18시 두 번 → `0 0,9 * * *`
+Modify the cron value inside:
 
-수정 후 commit + push 하면 다음 실행부터 적용된다.
-
-## 잘 안 될 때
-
-- **Actions 탭의 워크플로우가 빨간 X**: 워크플로우 클릭 → 실패한 단계 펼치면 로그가 보인다. 토큰 오타가 가장 흔한 원인.
-- **메시지가 안 옴**: 직접 대화방에서 봇에게 `/start` 했는지 확인. chat_id가 본인 개인 chat_id인지 확인.
-- **사이트 구조 바뀜**: HTML 구조가 변경되면 `notify.py`의 셀렉터 (`table tbody tr`, `a[href*='articleNo=']`) 조정 필요.
-
-## 파일 구조
-
+```plaintext id="ob4xgj"
+.github/workflows/notify.yml
 ```
+
+Cron uses UTC time.
+
+Examples:
+
+| Korea Time          | Cron          |
+| ------------------- | ------------- |
+| 8 AM                | `0 23 * * *`  |
+| 12 PM               | `0 3 * * *`   |
+| 9 AM and 6 PM daily | `0 0,9 * * *` |
+
+After editing:
+
+* commit
+* push
+
+The new schedule will apply automatically.
+
+---
+
+# Troubleshooting
+
+## Workflow Failed (Red X in Actions)
+
+Open the workflow logs and inspect the failed step.
+
+The most common issue is an incorrect Telegram token.
+
+---
+
+## Telegram Messages Not Arriving
+
+Check:
+
+* Did you send `/start` to the bot?
+* Is the `chat_id` correct?
+* Is it your personal chat_id?
+
+---
+
+## Website Structure Changed
+
+If the website HTML changes, you may need to update selectors inside `notify.py`.
+
+Current selectors:
+
+```plaintext id="lf9xvq"
+table tbody tr
+a[href*='articleNo=']
+```
+
+---
+
+# Project Structure
+
+```plaintext id="zz8k2m"
 cnu-notice-bot/
-├── notify.py                    스크래핑 + 텔레그램 전송 로직
-├── requirements.txt             파이썬 의존성
-├── seen.json                    게시판별 마지막 본 articleNo (자동 갱신)
-├── .env.example                 로컬 테스트용 환경변수 템플릿
+├── notify.py                    Scraping + Telegram notification logic
+├── requirements.txt             Python dependencies
+├── seen.json                    Last seen articleNo for each board
+├── .env.example                 Environment variable template for local testing
 ├── .gitignore
-├── README.md                    이 파일
+├── README.md                    This file
 └── .github/
     └── workflows/
-        └── notify.yml           매일 실행하는 GitHub Actions cron
+        └── notify.yml           GitHub Actions cron workflow
 ```
