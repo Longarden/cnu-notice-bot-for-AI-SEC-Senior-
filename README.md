@@ -1,4 +1,4 @@
-# CNU Computer & Artificial Intelligence Department Notice Notifier
+# CNU Computer & Artificial Intelligence Department Notice Notifier -> telegram, email to my email_account(you can change)
 
 This project automatically checks 4 notice boards from the Chungnam National University (CNU) Computer & Artificial Intelligence Department website every day and sends new notices to Telegram.
 
