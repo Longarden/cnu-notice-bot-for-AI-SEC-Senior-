@@ -3,6 +3,7 @@
 충남대학교 9개 게시판을 매일 한 번씩 확인해서 최근 7일 이내에 올라온 공지를 텔레그램으로 보내준다.
 
 GitHub Actions의 무료 cron으로 동작함. -> 따라서 다소 딜레이가 생길 수 있음.
+you can use in https://t.me/cnu_alarmbot
 
 ## 수집하는 게시판
 
