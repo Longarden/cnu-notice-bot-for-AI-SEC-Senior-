@@ -11,8 +11,12 @@ CNU 공지 · 공모전 · 인턴십 · 채용 알리미.
 날짜 윈도우로 거를 수 없다. 그래서 이 카테고리는 seen.json에 이미 본 글번호를
 기록해두고 '처음 보는 글'만 발송한다. 두 가지 필터 모드가 공존하는 이유다.
 
-발송은 텔레그램 채널 브로드캐스트가 기본이다. TELEGRAM_CHAT_ID에 채널(@이름)과
-개인 chat_id를 콤마로 여러 개 넣을 수 있다.
+발송 대상은 두 갈래를 합친 것이다.
+  - 봇에게 /start를 보낸 구독자 전원 (subscribers.enc에 암호화 저장)
+  - TELEGRAM_CHAT_ID에 명시한 대상. 채널(@이름)과 개인 chat_id를 콤마로 여러 개 가능
+
+즉 설정을 바꾸지 않아도 /start만 하면 알림을 받는다. 채널은 선택 사항이다.
+차단·탈퇴한 대상은 발송 실패 사유를 보고 명부에서 자동으로 빠진다.
 
 GitHub Actions cron으로 매일 실행되도록 설계됐다.
 """
@@ -745,10 +749,27 @@ def send_telegram(token: str, chat_id: str, text: str) -> None:
     )
 
 
+# 다시 시도해도 소용없는 실패들. 명부에서 그 사람을 빼는 기준이 된다.
+# 한국어 문구는 diagnose_target()이 직접 쓴 것이고, 영문은 텔레그램 원문이다.
+PERMANENT_FAILURE_MARKERS = (
+    "차단",
+    "대화방을 찾을 수 없음",
+    "탈퇴한 계정",
+    "bot was blocked",
+    "user is deactivated",
+    "chat not found",
+    "bot was kicked",
+)
+
+
+def is_permanent_failure(reason: str) -> bool:
+    return any(marker in reason for marker in PERMANENT_FAILURE_MARKERS)
+
+
 def diagnose_target(token: str, chat_id: str) -> str:
     """발송 전에 대상이 실제로 보낼 수 있는 곳인지 확인한다.
 
-    문제 없으면 빈 문자열, 있으면 사람이 읽고 바로 고칠 수 있는 한국어 안내를
+    문제 없으면 빈 문자열, 있으면 사람이 읽고 바로 고칠 수 있는 한국어 사유를
     돌려준다. 채널 방식에서 가장 흔한 사고(봇을 관리자로 안 넣음, 채널명 오타)를
     발송 실패가 아니라 명시적 진단으로 잡아내는 게 목적이다.
     """
@@ -759,42 +780,53 @@ def diagnose_target(token: str, chat_id: str) -> str:
         if "chat not found" in msg:
             if chat_id.startswith("@"):
                 return (
-                    f"{chat_id}: 채널을 찾을 수 없음. 채널명 오타이거나, "
-                    f"봇(@cnu_alarmbot)을 아직 채널 관리자로 추가하지 않았습니다."
+                    "채널을 찾을 수 없음. 채널명 오타이거나, "
+                    "봇(@cnu_alarmbot)을 아직 채널 관리자로 추가하지 않았습니다."
                 )
-            return f"{chat_id}: 대화방을 찾을 수 없음. 해당 사용자가 봇에게 /start를 보냈는지 확인하세요."
+            return "대화방을 찾을 수 없음. 봇에게 /start를 보낸 적이 있는지 확인하세요."
         if "bot was blocked" in msg:
-            return f"{chat_id}: 사용자가 봇을 차단했습니다."
-        return f"{chat_id}: {msg}"
+            return "사용자가 봇을 차단했습니다."
+        if "user is deactivated" in msg:
+            return "탈퇴한 계정입니다."
+        return msg
     return ""
 
 
-def answer_start_commands(
+def handle_commands(
     token: str, channel_link: str, roster: dict[str, dict]
-) -> int:
-    """봇에게 /start를 보낸 사람을 명부에 기록하고 채널 링크를 안내한다.
+) -> tuple[int, int]:
+    """봇에게 온 /start·/stop을 처리하고 (구독 수, 해지 수)를 돌려준다.
 
-    README에 이미 배포된 https://t.me/cnu_alarmbot 링크를 타고 들어온 사람이
-    아무 응답도 못 받는 문제를 막는 다리 역할이다. 처리한 update는 offset으로
-    확인 응답해 텔레그램 서버에서 지운다(중복 안내 방지).
+    /start를 보낸 사람은 그 자리에서 명부에 올라가고, 다음 발송부터 알림을 받는다.
+    사용자가 링크를 타고 들어와 /start를 눌렀는데 아무 일도 안 일어나던 게 원래
+    버그였으므로, 여기서 반드시 확인 메시지를 돌려준다.
 
+    처리한 update는 offset으로 확인 응답해 서버에서 지운다(중복 처리 방지).
     주의: 텔레그램은 미확인 update를 24시간만 보관하므로, 이 함수를 도는
     워크플로우 주기가 24시간을 넘으면 그 사이 온 /start를 놓친다.
     """
-    if not channel_link:
-        return 0
-
     try:
-        updates = telegram_api(token, "getUpdates", timeout=0, allowed_updates='["message"]')
+        updates = telegram_api(
+            token, "getUpdates", timeout=0, allowed_updates='["message"]'
+        )
     except RuntimeError as exc:
         print(f"getUpdates 실패(무시하고 진행): {exc}", file=sys.stderr)
-        return 0
+        return 0, 0
 
     if not updates:
-        return 0
+        return 0, 0
 
-    greeted: set[str] = set()
+    channel_line = (
+        f'\n\n채널로도 보고 싶으면: <a href="{escape_html(channel_link)}">'
+        f"{escape_html(channel_link)}</a>"
+        if channel_link
+        else ""
+    )
+
+    subscribed: set[str] = set()
+    unsubscribed: set[str] = set()
     last_update_id = 0
+
     for upd in updates:
         last_update_id = max(last_update_id, int(upd.get("update_id", 0)))
         message = upd.get("message") or {}
@@ -803,57 +835,67 @@ def answer_start_commands(
         cid = str(chat.get("id", ""))
         if not cid or chat.get("type") != "private":
             continue
-        if not text.startswith("/start"):
+
+        if text.startswith("/stop"):
+            roster.pop(cid, None)
+            unsubscribed.add(cid)
+            reply = (
+                "구독을 해지했습니다. 더 이상 알림을 보내지 않습니다.\n"
+                "다시 받으시려면 /start 를 보내주세요."
+            )
+        elif text.startswith("/start"):
+            # 최초 유입 시각은 보존하고 이름·최근 접속만 갱신한다
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            entry = roster.get(cid) or {"first_seen": stamp}
+            entry["name"] = " ".join(
+                p for p in (chat.get("first_name"), chat.get("last_name")) if p
+            ).strip()
+            entry["username"] = chat.get("username") or ""
+            entry["last_start"] = stamp
+            roster[cid] = entry
+            subscribed.add(cid)
+            reply = (
+                "<b>📢 CNU 알리미 구독 완료</b>\n\n"
+                "이제 매일 아침 9시에 이 대화방으로 알림이 옵니다.\n\n"
+                "🏫 충남대 공지 9개 게시판 (최근 7일)\n"
+                "🏆 AI·IT 공모전 (위비티, DACON)\n"
+                "🧑‍💻 인턴십 (링커리어)\n"
+                "💼 신입 채용 (점핏)\n\n"
+                "그만 받으시려면 /stop 을 보내주세요." + channel_line
+            )
+        else:
             continue
 
-        # 명부 기록: 최초 유입 시각은 보존하고, 이름/최근 접속만 갱신한다
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        entry = roster.get(cid) or {"first_seen": stamp}
-        entry["name"] = " ".join(
-            p for p in (chat.get("first_name"), chat.get("last_name")) if p
-        ).strip()
-        entry["username"] = chat.get("username") or ""
-        entry["last_start"] = stamp
-        roster[cid] = entry
-
-        if cid in greeted:
-            continue
-
-        greeting = (
-            "<b>CNU 공지 알리미</b>\n\n"
-            "이 봇은 이제 개별 답장 대신 <b>채널</b>로 공지를 보냅니다.\n"
-            f"아래 채널에 들어오시면 매일 알림을 받습니다.\n\n"
-            f'👉 <a href="{escape_html(channel_link)}">{escape_html(channel_link)}</a>'
-        )
         try:
-            send_telegram(token, cid, greeting)
-            greeted.add(cid)
+            send_telegram(token, cid, reply)
         except RuntimeError as exc:
-            print(f"/start 안내 실패 chat_id={cid}: {exc}", file=sys.stderr)
+            print(f"응답 실패 chat_id={cid}: {exc}", file=sys.stderr)
 
-    # 처리한 update를 확인 응답해 서버에서 제거(다음 실행 때 중복 안내 방지)
+    # 처리한 update를 확인 응답해 서버에서 제거(다음 실행 때 중복 처리 방지)
     if last_update_id:
         try:
             telegram_api(token, "getUpdates", offset=last_update_id + 1, timeout=0)
         except RuntimeError as exc:
             print(f"getUpdates offset 확인 실패: {exc}", file=sys.stderr)
 
-    return len(greeted)
+    return len(subscribed), len(unsubscribed)
 
 
-def broadcast(token: str, chat_ids: list[str], chunks: list[str], header: str) -> tuple[list[str], list[str]]:
-    """모든 대상에게 발송하고 (성공 목록, 실패 사유 목록)을 돌려준다.
+def broadcast(
+    token: str, chat_ids: list[str], chunks: list[str], header: str
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """모든 대상에게 발송하고 (성공한 chat_id 목록, (chat_id, 실패사유) 목록)을 돌려준다.
 
-    한 대상이 실패해도 나머지는 계속 보낸다. 개인 DM 하나가 차단됐다고 채널
-    브로드캐스트까지 죽으면 안 되기 때문.
+    한 대상이 실패해도 나머지는 계속 보낸다. 구독자 한 명이 봇을 차단했다고
+    나머지 전원의 알림이 죽으면 안 되기 때문.
     """
     delivered: list[str] = []
-    failures: list[str] = []
+    failures: list[tuple[str, str]] = []
 
     for cid in chat_ids:
         problem = diagnose_target(token, cid)
         if problem:
-            failures.append(problem)
+            failures.append((cid, problem))
             continue
         try:
             for i, chunk in enumerate(chunks):
@@ -861,12 +903,33 @@ def broadcast(token: str, chat_ids: list[str], chunks: list[str], header: str) -
                 time.sleep(0.3)
             delivered.append(cid)
         except RuntimeError as exc:
-            failures.append(f"{cid}: {exc}")
+            failures.append((cid, str(exc)))
 
     return delivered, failures
 
 
-def delivery_exit_code(delivered: list[str], failures: list[str]) -> int:
+def prune_roster(
+    roster: dict[str, dict], failures: list[tuple[str, str]]
+) -> list[str]:
+    """차단·탈퇴처럼 재시도가 무의미한 대상을 명부에서 뺀다.
+
+    이걸 안 하면 봇을 차단한 사람에게 매일 발송을 시도하면서 실패 로그가 계속
+    쌓이고, 텔레그램 쪽 요청 낭비도 누적된다. 사용자가 다시 /start를 보내면
+    자연히 명부에 다시 들어온다.
+    """
+    removed: list[str] = []
+    for cid, reason in failures:
+        if cid.startswith("@"):
+            continue  # 채널은 명부 대상이 아니다
+        if cid in roster and is_permanent_failure(reason):
+            roster.pop(cid)
+            removed.append(cid)
+    return removed
+
+
+def delivery_exit_code(
+    delivered: list[str], failures: list[tuple[str, str]]
+) -> int:
     """발송 결과를 GitHub Actions 종료 코드로 바꾼다.
 
     0을 돌려주면 Actions가 초록 체크, 0이 아니면 빨간 X + 실패 알림 메일.
@@ -880,13 +943,14 @@ def delivery_exit_code(delivered: list[str], failures: list[str]) -> int:
     if not delivered:
         return 1
 
-    # 채널이 주 발송 경로다. 채널이 죽었으면 개인 DM 몇 개가 살아 있어도 실패로 본다.
-    if any(problem.lstrip().startswith("@") for problem in failures):
+    # 채널을 지정해뒀다면 그게 주 발송 경로다. 채널이 죽었으면 개인 DM 몇 개가
+    # 살아 있어도 실패로 본다.
+    if any(cid.startswith("@") for cid, _ in failures):
         return 1
 
-    # 개인 chat_id 일부 실패는 초록으로 넘긴다. 예전에 등록해둔 사람이 봇을 차단하면
-    # 영구 실패가 되는데, 이걸 빨간 X로 취급하면 매일 실패 메일이 오고 seen.json이
-    # 계속 보류돼 같은 공모전이 매일 다시 발송된다. 로그에는 이미 사유가 남는다.
+    # 개인 구독자 일부 실패는 초록으로 넘긴다. 누군가 봇을 차단하면 영구 실패가
+    # 되는데, 이걸 빨간 X로 취급하면 매일 실패 메일이 오고 seen.json이 계속
+    # 보류돼 같은 공모전이 매일 다시 발송된다. 사유는 로그와 명부 정리로 남는다.
     return 0
 
 
@@ -1078,30 +1142,42 @@ def main() -> int:
     email_to = os.environ.get("EMAIL_TO", "").strip() or naver_user
     dry_run = os.environ.get("DRY_RUN", "").strip() == "1"
 
-    telegram_enabled = bool(token and chat_ids)
     email_enabled = bool(naver_user and naver_pass)
+
+    # 구독자 명부를 먼저 처리한다. /start 한 사람이 그 자리에서 발송 대상이 되도록.
+    roster: dict[str, dict] = {}
+    if token and not dry_run:
+        roster = load_roster(token)
+        before = dict(roster)
+        joined, left = handle_commands(token, channel_link, roster)
+        if roster != before:
+            if save_roster(token, roster):
+                print(
+                    f"구독자 명부 갱신: 총 {len(roster)}명 "
+                    f"(신규 {joined}명, 해지 {left}명)"
+                )
+
+    # 발송 대상 = 명시적으로 지정한 대상(채널/개인) + 봇에 /start 한 구독자 전원.
+    # TELEGRAM_CHAT_ID를 손대지 않아도 구독자에게 알림이 가게 하는 게 핵심이다.
+    for cid in roster:
+        if cid not in chat_ids:
+            chat_ids.append(cid)
+
+    telegram_enabled = bool(token and chat_ids)
 
     if not dry_run and not telegram_enabled and not email_enabled:
         print(
-            "ERROR: 텔레그램(TELEGRAM_BOT_TOKEN+TELEGRAM_CHAT_ID) 또는 "
-            "네이버 이메일(NAVER_USERNAME+NAVER_PASSWORD) 자격증명이 하나도 없습니다.",
+            "ERROR: 발송 대상이 없습니다. TELEGRAM_CHAT_ID를 설정하거나, "
+            "봇에게 /start를 보내 구독자를 만들거나, "
+            "네이버 이메일(NAVER_USERNAME+NAVER_PASSWORD)을 설정하세요.",
             file=sys.stderr,
         )
         return 2
 
-    # 새로 /start 한 사람 응대 + 명부 갱신. 공지 발송과 독립적으로 먼저 처리한다.
-    if token and not dry_run:
-        roster = load_roster(token)
-        before = len(roster)
-        greeted = answer_start_commands(token, channel_link, roster)
-        if len(roster) != before or greeted:
-            if save_roster(token, roster):
-                print(f"구독자 명부 갱신: 총 {len(roster)}명 (신규 안내 {greeted}건)")
-
     # 인사 전용 모드. 텔레그램은 미확인 update를 24시간만 보관하므로 이 경로만
     # 짧은 주기(greet.yml)로 자주 돌린다. 공지 다이제스트는 하루 한 번 그대로.
     if os.environ.get("GREET_ONLY", "").strip() == "1":
-        print("GREET_ONLY: /start 응대만 수행하고 종료")
+        print("GREET_ONLY: /start·/stop 응대만 수행하고 종료")
         return 0
 
     seen = load_seen()
@@ -1126,12 +1202,19 @@ def main() -> int:
         header = f"<b>📢 CNU 알리미 · 새 소식 {len(picked)}건</b>\n"
         delivered, failures = broadcast(token, chat_ids, chunks, header)
 
-        for problem in failures:
-            print(f"텔레그램 전송 실패: {problem}", file=sys.stderr)
+        for cid, reason in failures:
+            print(f"텔레그램 전송 실패 [{cid}]: {reason}", file=sys.stderr)
         if delivered:
             print(
                 f"텔레그램 전송 완료: {len(delivered)}개 대상 × {len(chunks)} 메시지"
             )
+
+        # 차단·탈퇴한 사람은 명부에서 빼서 매일 헛발송하지 않게 한다
+        removed = prune_roster(roster, failures)
+        if removed:
+            print(f"명부에서 제외(차단/탈퇴): {len(removed)}명")
+            save_roster(token, roster)
+
         exit_code = delivery_exit_code(delivered, failures)
     else:
         print("텔레그램 자격증명 없음 - 텔레그램 전송 스킵")
