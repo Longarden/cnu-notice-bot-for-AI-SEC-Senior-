@@ -805,6 +805,15 @@ def handle_commands(
     주의: 텔레그램은 미확인 update를 24시간만 보관하므로, 이 함수를 도는
     워크플로우 주기가 24시간을 넘으면 그 사이 온 /start를 놓친다.
     """
+    # 어느 봇 토큰으로 돌고 있는지 먼저 남긴다. "구독자가 안 잡힌다"의 원인이
+    # 토큰이 다른 봇 것이었던 경우를 로그만 보고 즉시 가려내기 위한 것이다.
+    try:
+        me = telegram_api(token, "getMe")
+        print(f"봇 확인: @{me.get('username')} ({me.get('first_name')})")
+    except RuntimeError as exc:
+        print(f"getMe 실패 - 토큰이 잘못됐을 수 있습니다: {exc}", file=sys.stderr)
+        return 0, 0
+
     try:
         updates = telegram_api(
             token, "getUpdates", timeout=0, allowed_updates='["message"]'
@@ -813,7 +822,11 @@ def handle_commands(
         print(f"getUpdates 실패(무시하고 진행): {exc}", file=sys.stderr)
         return 0, 0
 
+    # 조용히 0건으로 끝나는 경우를 로그에서 구분할 수 있어야 한다. 이 줄이 없어서
+    # "워크플로우는 성공인데 아무 일도 안 일어남"의 원인 파악이 늦어진 적이 있다.
+    print(f"대기 중인 메시지 {len(updates)}건")
     if not updates:
+        print("→ 봇에게 온 새 메시지가 없습니다. /start 를 직접 입력했는지 확인하세요.")
         return 0, 0
 
     channel_line = (
@@ -864,10 +877,14 @@ def handle_commands(
                 "그만 받으시려면 /stop 을 보내주세요." + channel_line
             )
         else:
+            # 명령이 아닌 잡담도 로그에 남긴다. 메시지는 왔는데 아무도 구독되지
+            # 않는 상황을 "명령어를 안 썼구나"로 바로 알아볼 수 있어야 한다.
+            print(f"명령 아님(무시) chat_id={cid}: {text[:30]!r}")
             continue
 
         try:
             send_telegram(token, cid, reply)
+            print(f"응답 전송 chat_id={cid}: {text.split()[0]}")
         except RuntimeError as exc:
             print(f"응답 실패 chat_id={cid}: {exc}", file=sys.stderr)
 
