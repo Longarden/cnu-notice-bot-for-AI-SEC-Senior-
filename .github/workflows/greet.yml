@@ -1,21 +1,24 @@
-name: CNU Notice Notifier
+name: CNU Notice Greeter
+
+# 봇에게 /start 를 보낸 사람에게 채널 링크를 안내하고 구독자 명부를 갱신한다.
+# 텔레그램은 미확인 update를 24시간만 보관하므로, 하루 한 번짜리 notify.yml에만
+# 의존하면 그 사이 들어온 사람을 놓칠 수 있다. 그래서 이 경로만 따로 자주 돈다.
+# 공지 다이제스트는 보내지 않으므로 자주 돌아도 알림이 늘어나지 않는다.
 
 on:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "30 */3 * * *"
   workflow_dispatch:
 
-# seen.json / subscribers.enc 를 저장소에 다시 커밋해야 하므로 쓰기 권한이 필요하다.
 permissions:
   contents: write
 
-# 상태 파일을 커밋하는 워크플로우끼리는 절대 동시에 돌면 안 된다(greet.yml과 공유).
 concurrency:
   group: cnu-notice-state
   cancel-in-progress: false
 
 jobs:
-  notify:
+  greet:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -30,27 +33,24 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run notifier
+      - name: Greet new subscribers
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_CHANNEL_LINK: ${{ vars.TELEGRAM_CHANNEL_LINK }}
-          NAVER_USERNAME: ${{ secrets.NAVER_USERNAME }}
-          NAVER_PASSWORD: ${{ secrets.NAVER_PASSWORD }}
+          GREET_ONLY: "1"
         run: python notify.py
 
-      # 발송이 실패해도 명부(subscribers.enc)는 갱신됐을 수 있으므로 always().
-      # seen.json 은 발송 성공 시에만 파이썬이 기록하므로 여기서 따질 필요가 없다.
-      - name: Commit state files
+      - name: Commit roster
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- seen.json subscribers.enc 2>/dev/null || true
+          git add -- subscribers.enc 2>/dev/null || true
           if git diff --cached --quiet; then
-            echo "상태 변경 없음 - 커밋 생략"
+            echo "명부 변경 없음 - 커밋 생략"
             exit 0
           fi
-          git commit -m "chore: update notifier state [skip ci]"
+          git commit -m "chore: update subscriber roster [skip ci]"
           git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
           git push origin "HEAD:${GITHUB_REF_NAME}"
