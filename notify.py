@@ -1158,6 +1158,8 @@ def main() -> int:
     naver_pass = os.environ.get("NAVER_PASSWORD", "").strip()
     email_to = os.environ.get("EMAIL_TO", "").strip() or naver_user
     dry_run = os.environ.get("DRY_RUN", "").strip() == "1"
+    notion_token = os.environ.get("NOTION_TOKEN", "").strip()
+    notion_db = os.environ.get("NOTION_DATABASE_ID", "").strip()
 
     email_enabled = bool(naver_user and naver_pass)
 
@@ -1252,6 +1254,19 @@ def main() -> int:
         save_seen(seen)
     else:
         print("발송 실패로 seen.json 갱신 보류 - 다음 실행에서 재시도", file=sys.stderr)
+
+    # Notion 캘린더 동기화는 부가 기능이다. 발송과 seen.json이 확정된 뒤에만 돌고,
+    # import 오류를 포함해 어떤 실패도 위의 발송 결과나 종료 코드를 바꾸지 않는다.
+    if exit_code == 0 and notion_token and notion_db:
+        try:
+            from notion_sync import sync_to_notion
+
+            result = sync_to_notion(
+                picked, notion_token, notion_db, CATEGORY_ICON, parse_date
+            )
+            print(f"Notion 동기화: {result}")
+        except Exception as exc:
+            print(f"Notion 동기화 실패: {type(exc).__name__}", file=sys.stderr)
 
     return exit_code
 

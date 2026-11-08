@@ -37,6 +37,8 @@ jobs:
           TELEGRAM_CHANNEL_LINK: ${{ vars.TELEGRAM_CHANNEL_LINK }}
           NAVER_USERNAME: ${{ secrets.NAVER_USERNAME }}
           NAVER_PASSWORD: ${{ secrets.NAVER_PASSWORD }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ vars.NOTION_DATABASE_ID }}
         run: python notify.py
 
       # 발송이 실패해도 명부(subscribers.enc)는 갱신됐을 수 있으므로 always().
