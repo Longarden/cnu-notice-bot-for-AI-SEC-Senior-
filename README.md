@@ -180,6 +180,46 @@ chat_id, 이름, username, 최초/최근 접속 시각이 표로 나오고, 마�
 봇 토큰을 재발급하면 기존 명부를 못 읽는다. 그럴 땐 `ROSTER_KEY` 환경변수(또는 Secret)에
 **이전 토큰**을 넣으면 계속 읽을 수 있다.
 
+## Notion 캘린더 연동 (선택)
+
+발송에 성공한 날, 그날 보낸 공지를 Notion 데이터베이스에 일정으로도 올린다.
+Notion 캘린더에 그 DB를 연결해 두면 공지가 캘린더 일정으로 보인다.
+
+- 제목: `🏆 공지 제목`처럼 카테고리 아이콘 + 제목
+- 날짜: 마감일(`~2026.11.30`, 위비티 `D-12`는 실행일+12일) → 없으면 등록일 → 둘 다 없으면 실행일
+- 분류(select): `학교공지` 초록 · `공모전` 보라 · `인턴십` 주황 · `채용` 분홍
+- 메모: 공지 링크. 중복 판단 키로 쓴다(비교과는 링크가 모두 같아 `#글번호`를 붙인다)
+
+DB에는 `이름`(제목), `날짜`(날짜), `분류`(선택), `메모`(텍스트) 속성이 있어야 하고,
+분류 옵션 네 개는 **색을 정해서 미리 만들어 둔다**(없는 옵션은 API가 무작위 색으로 만든다).
+
+설정:
+
+1. https://www.notion.so/profile/integrations 에서 **내부(Internal) integration**을 만들고 토큰을 복사
+2. Notion에서 대상 DB → `•••` → **연결(Connections)** → 방금 만든 integration 추가
+3. GitHub repo → Settings → Secrets and variables → Actions
+   - Secrets: `NOTION_TOKEN` = 1단계 토큰
+   - Variables: `NOTION_DATABASE_ID` = DB 주소의 32자리 ID
+
+둘 중 하나라도 비어 있으면 Notion 단계는 조용히 건너뛴다.
+
+Notion 쪽 문제는 알림 발송에 영향을 주지 않는다. 동기화는 텔레그램 발송과 `seen.json`
+기록이 끝난 뒤에만 돌고, 인증 오류·서버 장애·연결 오류가 나면 바로 멈추며, 최대 90초 안에 끝난다.
+기존 일정 조회가 실패하면 중복을 피하려고 그날은 아무것도 만들지 않는다.
+
+알려진 한계:
+- 공모전/인턴십/채용은 한 번만 발송되므로, 그날 Notion 동기화가 실패하면 그 공지는 Notion에 올라가지 않는다.
+  학교공지는 7일간 반복 노출되므로 다음 실행에서 다시 시도된다.
+- 봇이 만든 일정을 Notion에서 보관(archive)하면, 7일 안에 같은 학교공지가 다시 오면 새로 만들어진다.
+- Notion 캘린더 앱은 일정 색을 DB 단위로 칠할 수 있다. 그래서 제목 앞 아이콘으로도 종류를 구분한다.
+- 링커리어 마감 시각은 UTC 러너에서 날짜로 바뀌므로, 한국시간 0~9시 마감은 하루 앞당겨 보일 수 있다.
+
+테스트(네트워크 없이 Notion 호출을 흉내 냄):
+
+```powershell
+py -m unittest discover -s tests
+```
+
 ## 로컬에서 테스트
 
 전송 없이 스크래핑 동작만 확인:
@@ -252,7 +292,9 @@ py notify.py
 ```
 cnu-notice-bot/
 ├── notify.py              수집 + 필터 + 텔레그램 발송 로직
+├── notion_sync.py         발송한 공지를 Notion DB 일정으로 올림 (선택)
 ├── roster.py              구독자 명부 열람 CLI (소유자 전용)
+├── tests/                 단위 테스트 (python -m unittest discover -s tests)
 ├── seen.json              이미 발송한 글번호 (공모전/인턴십/채용용, 자동 커밋)
 ├── subscribers.enc        암호화된 구독자 명부 (자동 커밋)
 ├── requirements.txt       파이썬 의존성 (requests, beautifulsoup4, cryptography)
